@@ -7,7 +7,7 @@ BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT_JSON="${BASE_DIR}/devices.json"
 OUT_MD="${BASE_DIR}/devices.md"
 HISTORY_JSON="${BASE_DIR}/.scan_history.json"
-VERSION="v00.01.00"
+VERSION="v00.02.00"
 
 # 1) Ping sweep to populate ARP/neigh cache
 seq 1 254 | xargs -I{} -P 64 sh -c "ping -c 1 -W 1 ${NETWORK_PREFIX}.{} >/dev/null 2>&1 || true"
