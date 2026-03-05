@@ -8,6 +8,71 @@ from pathlib import Path
 FAILED_STATES = {"FAILED", "INCOMPLETE"}
 
 
+def _add_tag(tags: list[str], tag: str | None) -> None:
+    if tag and tag not in tags:
+        tags.append(tag)
+
+
+def build_uptime_kuma_tags(ip: str | None, name: str | None, manufacturer: str | None) -> list[str]:
+    n = (name or "").lower()
+    m = (manufacturer or "").lower()
+    tags: list[str] = []
+
+    if ip == "192.168.1.1" or any(k in n for k in ["dreampro", "router", "gateway", "fortigate", "firewall"]):
+        _add_tag(tags, "network-core")
+    if any(k in n for k in ["switch", "flex mini"]) or "switch" in m:
+        _add_tag(tags, "switch")
+    if any(k in n for k in ["ap -", "access point", "uap", "wi-fi", "wifi"]):
+        _add_tag(tags, "ap")
+    if "camera" in n:
+        _add_tag(tags, "camera")
+    if any(k in n for k in ["nas", "synology", "truenas"]):
+        _add_tag(tags, "storage")
+    if any(k in n for k in ["server", "proxmox", "docker", "k8s", "unraid"]):
+        _add_tag(tags, "server")
+    if any(k in n for k in ["iphone", "ipad", "pixel", "galaxy", "phone"]):
+        _add_tag(tags, "mobile")
+    if any(k in n for k in ["laptop", "macbook", "notebook"]):
+        _add_tag(tags, "laptop")
+    if any(k in n for k in ["desktop", "pc", "workstation", "imac"]):
+        _add_tag(tags, "desktop")
+    if any(k in n for k in ["apple tv", "roku", "chromecast", "xbox", "playstation", "shield", "tv"]):
+        _add_tag(tags, "media")
+    if "printer" in n:
+        _add_tag(tags, "printer")
+
+    if not any(t in tags for t in ["network-core", "switch", "ap", "camera", "storage", "server", "desktop", "laptop", "mobile", "media", "printer"]):
+        _add_tag(tags, "iot")
+
+    if "camera" in tags or any(t in tags for t in ["network-core", "switch", "ap", "storage", "server"]):
+        _add_tag(tags, "critical")
+    else:
+        _add_tag(tags, "optional")
+
+    loc_map = {
+        "basement": "downstairs",
+        "lower level": "downstairs",
+        "first floor": "downstairs",
+        "kitchen": "downstairs",
+        "living room": "downstairs",
+        "great room": "downstairs",
+        "family room": "downstairs",
+        "office": "office",
+        "garage": "garage",
+        "front": "exterior",
+        "outside": "exterior",
+        "second floor": "upstairs",
+        "master bedroom": "upstairs",
+        "bedroom": "upstairs",
+        "sui lin": "upstairs",
+    }
+    for key, value in loc_map.items():
+        if key in n:
+            _add_tag(tags, value)
+
+    return tags
+
+
 def now_iso() -> str:
     return datetime.datetime.now().astimezone().isoformat()
 
@@ -149,6 +214,7 @@ def collect_devices(iface: str, history: dict, oui_map: dict, additional_name_ma
         prev = history.get(ip, {})
         first_seen = prev.get("first_seen", ts)
 
+        tags = build_uptime_kuma_tags(ip, hostname or ip, manufacturer)
         device = {
             "ip": ip,
             "mac": mac,
@@ -157,6 +223,7 @@ def collect_devices(iface: str, history: dict, oui_map: dict, additional_name_ma
             "state": parsed["state"],
             "first_seen": first_seen,
             "last_seen": ts,
+            "uptime_kuma_tags": tags,
         }
         devices.append(device)
 
@@ -193,12 +260,13 @@ def write_markdown(path: Path, payload: dict) -> None:
         f"- **Count:** `{payload['count']}`",
         f"- **Method:** {payload['scan_method']}",
         "",
-        "| IP | MAC | Hostname | Manufacturer | State | First Seen | Last Seen |",
-        "|---|---|---|---|---|---|---|",
+        "| IP | MAC | Hostname | Manufacturer | State | Tags | First Seen | Last Seen |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for d in payload["devices"]:
+        tags = ", ".join(d.get("uptime_kuma_tags") or [])
         rows.append(
-            f"| {d.get('ip') or ''} | {d.get('mac') or ''} | {d.get('hostname') or ''} | {d.get('manufacturer') or ''} | {d.get('state') or ''} | {d.get('first_seen') or ''} | {d.get('last_seen') or ''} |"
+            f"| {d.get('ip') or ''} | {d.get('mac') or ''} | {d.get('hostname') or ''} | {d.get('manufacturer') or ''} | {d.get('state') or ''} | {tags} | {d.get('first_seen') or ''} | {d.get('last_seen') or ''} |"
         )
     path.write_text("\n".join(rows) + "\n")
 
@@ -229,13 +297,14 @@ def write_overview_markdown_with_links(path: Path, payload: dict) -> None:
         f"- **Count:** `{payload['count']}`",
         f"- **Method:** {payload['scan_method']}",
         "",
-        "| Device | IP | MAC | Hostname | Manufacturer | State | First Seen | Last Seen |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Device | IP | MAC | Hostname | Manufacturer | State | Tags | First Seen | Last Seen |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for d in payload["devices"]:
         note = f"devices/{device_note_name(d)}"
+        tags = ", ".join(d.get("uptime_kuma_tags") or [])
         rows.append(
-            f"| [[{note}]] | {d.get('ip') or ''} | {d.get('mac') or ''} | {d.get('hostname') or ''} | {d.get('manufacturer') or ''} | {d.get('state') or ''} | {d.get('first_seen') or ''} | {d.get('last_seen') or ''} |"
+            f"| [[{note}]] | {d.get('ip') or ''} | {d.get('mac') or ''} | {d.get('hostname') or ''} | {d.get('manufacturer') or ''} | {d.get('state') or ''} | {tags} | {d.get('first_seen') or ''} | {d.get('last_seen') or ''} |"
         )
     path.write_text("\n".join(rows) + "\n")
 
@@ -288,6 +357,7 @@ def write_uptime_kuma_backup(base_dir: Path, payload: dict) -> Path:
         if not ip:
             continue
         name = (d.get("hostname") or "").strip() or ip
+        monitor_tags = [{"name": t, "value": t} for t in (d.get("uptime_kuma_tags") or [])]
         monitors.append(
             {
                 "id": next_id,
@@ -324,7 +394,7 @@ def write_uptime_kuma_backup(base_dir: Path, payload: dict) -> Path:
                 "docker_host": None,
                 "proxyId": None,
                 "notificationIDList": {},
-                "tags": [],
+                "tags": monitor_tags,
                 "maintenance": False,
                 "mqttTopic": None,
                 "mqttSuccessMessage": None,
@@ -418,6 +488,7 @@ def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dic
             f"hostname: {d.get('hostname') or ''}",
             f"manufacturer: {d.get('manufacturer') or ''}",
             f"state: {d.get('state')}",
+            f"uptime_kuma_tags: [{', '.join(d.get('uptime_kuma_tags') or [])}]",
             f"first_seen: {d.get('first_seen')}",
             f"last_seen: {d.get('last_seen')}",
             "---",
@@ -429,6 +500,7 @@ def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dic
             f"- Manufacturer: `{d.get('manufacturer') or 'unknown'}`",
             f"- MAC: `{d.get('mac') or 'unknown'}`",
             f"- State: `{d.get('state')}`",
+            f"- Uptime Kuma tags: `{', '.join(d.get('uptime_kuma_tags') or [])}`",
         ]
         p.write_text("\n".join(fm) + "\n")
 
