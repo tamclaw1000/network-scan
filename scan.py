@@ -250,6 +250,122 @@ def build_scan_diff(previous_payload: dict | None, current_payload: dict) -> dic
     }
 
 
+def write_uptime_kuma_backup(base_dir: Path, payload: dict) -> Path:
+    """Generate a Uptime Kuma backup JSON from current scan payload.
+
+    Output intentionally contains only flat ping monitors (no groups/tags)
+    to keep imports and diffs simple.
+    """
+    stamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+    out_path = base_dir / f"Uptime_Kuma_Backup_from_scan_{stamp}.json"
+
+    monitors = []
+    next_id = 1
+    for d in payload.get("devices", []):
+        ip = d.get("ip")
+        if not ip:
+            continue
+        name = (d.get("hostname") or "").strip() or ip
+        monitors.append(
+            {
+                "id": next_id,
+                "name": name,
+                "description": None,
+                "pathName": name,
+                "parent": None,
+                "childrenIDs": [],
+                "url": None,
+                "method": "GET",
+                "hostname": ip,
+                "port": None,
+                "maxretries": 3,
+                "weight": 2000,
+                "active": True,
+                "forceInactive": False,
+                "type": "ping",
+                "timeout": 48,
+                "interval": 60,
+                "retryInterval": 60,
+                "resendInterval": 0,
+                "keyword": None,
+                "invertKeyword": False,
+                "expiryNotification": True,
+                "ignoreTls": False,
+                "upsideDown": False,
+                "packetSize": 56,
+                "maxredirects": 10,
+                "accepted_statuscodes": ["200-299"],
+                "dns_resolve_type": None,
+                "dns_resolve_server": None,
+                "dns_last_result": None,
+                "docker_container": None,
+                "docker_host": None,
+                "proxyId": None,
+                "notificationIDList": {},
+                "tags": [],
+                "maintenance": False,
+                "mqttTopic": None,
+                "mqttSuccessMessage": None,
+                "databaseQuery": None,
+                "authMethod": None,
+                "grpcUrl": None,
+                "grpcProtobuf": None,
+                "grpcMethod": None,
+                "grpcServiceName": None,
+                "grpcEnableTls": False,
+                "radiusCalledStationId": None,
+                "radiusCallingStationId": None,
+                "game": None,
+                "gamedigGivenPortOnly": True,
+                "httpBodyEncoding": None,
+                "jsonPath": None,
+                "expectedValue": None,
+                "kafkaProducerTopic": None,
+                "kafkaProducerBrokers": None,
+                "kafkaProducerSsl": False,
+                "kafkaProducerAllowAutoTopicCreation": False,
+                "kafkaProducerMessage": None,
+                "screenshot": None,
+                "headers": None,
+                "body": None,
+                "grpcBody": None,
+                "grpcMetadata": None,
+                "basic_auth_user": None,
+                "basic_auth_pass": None,
+                "oauth_client_id": None,
+                "oauth_client_secret": None,
+                "oauth_token_url": None,
+                "oauth_scopes": None,
+                "oauth_auth_method": None,
+                "pushToken": None,
+                "databaseConnectionString": None,
+                "radiusUsername": None,
+                "radiusPassword": None,
+                "radiusSecret": None,
+                "mqttUsername": None,
+                "mqttPassword": None,
+                "authWorkstation": None,
+                "authDomain": None,
+                "tlsCa": None,
+                "tlsCert": None,
+                "tlsKey": None,
+                "kafkaProducerSaslOptions": None,
+                "includeSensitiveData": True,
+            }
+        )
+        next_id += 1
+
+    backup = {
+        "version": "1.23.13",
+        "notificationList": [],
+        "monitorList": monitors,
+    }
+
+    out_path.write_text(json.dumps(backup, indent=2))
+    (base_dir / "Uptime_Kuma_Backup_from_scan_latest.json").write_text(json.dumps(backup, indent=2))
+    return out_path
+
+
 def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dict | None = None) -> None:
     if not vault_cfg:
         return
@@ -500,9 +616,11 @@ def main() -> None:
     save_history(cfg["history_json"], cfg["version"], ts, updated_history)
     write_markdown(cfg["out_md"], payload)
     write_obsidian_exports(cfg.get("vault", {}), payload, previous_payload)
+    kuma_backup_path = write_uptime_kuma_backup(cfg["base_dir"], payload)
 
     print(str(cfg["out_json"]))
     print(str(cfg["out_md"]))
+    print(str(kuma_backup_path))
     if cfg.get("vault"):
         base = Path(cfg["vault"]["vault_path"]) / cfg["vault"]["systems_folder"]
         print(str(base))
