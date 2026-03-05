@@ -50,6 +50,26 @@ def save_history(path: Path, version: str, ts: str, devices_map: dict) -> None:
     path.write_text(json.dumps(payload, indent=2))
 
 
+def load_additional_devices_map(path: Path) -> dict[str, str]:
+    """Load optional IP->name overrides from additional-devices.json."""
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+        mapping = {}
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                ip = (item.get("ip") or "").strip()
+                name = (item.get("name") or "").strip()
+                if ip and name:
+                    mapping[ip] = name
+        return mapping
+    except Exception:
+        return {}
+
+
 def load_oui_map() -> dict:
     candidates = [Path("/usr/share/ieee-data/oui.txt"), Path("/usr/share/misc/oui.txt")]
     oui = {}
@@ -109,7 +129,7 @@ def parse_neighbor_line(line: str) -> dict | None:
     return {"ip": ip, "mac": mac, "state": state}
 
 
-def collect_devices(iface: str, history: dict, oui_map: dict, ts: str) -> tuple[list, dict]:
+def collect_devices(iface: str, history: dict, oui_map: dict, additional_name_map: dict, ts: str) -> tuple[list, dict]:
     raw = subprocess.check_output(["ip", "neigh", "show", "dev", iface], text=True)
     devices = []
     updated_history = dict(history)
@@ -122,6 +142,8 @@ def collect_devices(iface: str, history: dict, oui_map: dict, ts: str) -> tuple[
         ip = parsed["ip"]
         mac = parsed["mac"]
         hostname = resolve_hostname(ip)
+        if not hostname:
+            hostname = additional_name_map.get(ip)
         manufacturer = vendor_for_mac(mac, oui_map)
 
         prev = history.get(ip, {})
@@ -608,8 +630,9 @@ def main() -> None:
 
     history = load_history(cfg["history_json"])
     oui_map = load_oui_map()
+    additional_name_map = load_additional_devices_map(cfg["base_dir"] / "additional-devices.json")
 
-    devices, updated_history = collect_devices(cfg["iface"], history, oui_map, ts)
+    devices, updated_history = collect_devices(cfg["iface"], history, oui_map, additional_name_map, ts)
     payload = build_payload(cfg["version"], cfg["network_prefix"], ts, devices)
 
     cfg["out_json"].write_text(json.dumps(payload, indent=2))
