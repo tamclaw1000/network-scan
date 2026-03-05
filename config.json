@@ -1,5 +1,15 @@
 {
   "version": "v00.02.00",
-  "vault_path": "/home/tamclaw/.openclaw/workspace-darren/Obsidian/TamClawDevVault",
-  "systems_folder": "Projects/homenetwork/systems"
+  "network_prefix": "192.168.1",
+  "interface": "eth0",
+  "scan_range_start": 1,
+  "scan_range_end": 254,
+  "ping_count": 1,
+  "ping_timeout_seconds": 1,
+  "ping_parallelism": 64,
+  "output_json": "devices.json",
+  "output_markdown": "devices.md",
+  "history_file": ".scan_history.json",
+  "vault_path": "/home/tamclaw/.openclaw/workspace/TamClawVault",
+  "systems_folder": "systems/homenetwork"
 }

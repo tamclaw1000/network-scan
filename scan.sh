@@ -1,18 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-NETWORK_PREFIX="192.168.1"
-IFACE="eth0"
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
-OUT_JSON="${BASE_DIR}/devices.json"
-OUT_MD="${BASE_DIR}/devices.md"
-HISTORY_JSON="${BASE_DIR}/.scan_history.json"
-VERSION="v00.02.00"
+CONFIG_FILE="${BASE_DIR}/config.json"
+
+# Load all runtime parameters from config.json
+mapfile -t CFG < <(python3 - "$CONFIG_FILE" "$BASE_DIR" <<'PY'
+import json, sys
+from pathlib import Path
+cfg_path=Path(sys.argv[1])
+base=Path(sys.argv[2])
+cfg=json.loads(cfg_path.read_text())
+
+def out(v):
+    print(v)
+
+out(cfg["network_prefix"])
+out(cfg["interface"])
+out(str(cfg["scan_range_start"]))
+out(str(cfg["scan_range_end"]))
+out(str(cfg["ping_count"]))
+out(str(cfg["ping_timeout_seconds"]))
+out(str(cfg["ping_parallelism"]))
+out(str(base / cfg["output_json"]))
+out(str(base / cfg["output_markdown"]))
+out(str(base / cfg["history_file"]))
+out(cfg["version"])
+PY
+)
+
+NETWORK_PREFIX="${CFG[0]}"
+IFACE="${CFG[1]}"
+SCAN_START="${CFG[2]}"
+SCAN_END="${CFG[3]}"
+PING_COUNT="${CFG[4]}"
+PING_TIMEOUT_SECONDS="${CFG[5]}"
+PING_PARALLELISM="${CFG[6]}"
+OUT_JSON="${CFG[7]}"
+OUT_MD="${CFG[8]}"
+HISTORY_JSON="${CFG[9]}"
+VERSION="${CFG[10]}"
 
 # 1) Ping sweep to populate ARP/neigh cache
-seq 1 254 | xargs -I{} -P 64 sh -c "ping -c 1 -W 1 ${NETWORK_PREFIX}.{} >/dev/null 2>&1 || true"
+seq "$SCAN_START" "$SCAN_END" | xargs -I{} -P "$PING_PARALLELISM" sh -c \
+  "ping -c '$PING_COUNT' -W '$PING_TIMEOUT_SECONDS' '${NETWORK_PREFIX}.{}' >/dev/null 2>&1 || true"
 
-# 2) Build enriched JSON + Markdown
+# 2) Build enriched JSON + Markdown + vault exports
 export IFACE NETWORK_PREFIX OUT_JSON OUT_MD HISTORY_JSON VERSION
 python3 "${BASE_DIR}/scan.py"
 

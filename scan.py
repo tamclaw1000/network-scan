@@ -3,7 +3,6 @@ import datetime
 import json
 import socket
 import subprocess
-from collections import Counter, defaultdict
 from pathlib import Path
 
 FAILED_STATES = {"FAILED", "INCOMPLETE"}
@@ -14,35 +13,26 @@ def now_iso() -> str:
 
 
 def get_env_config() -> dict:
-    import os
-
     base_dir = Path(__file__).resolve().parent
+    cfg_path = base_dir / "config.json"
+    data = json.loads(cfg_path.read_text())
+
     cfg = {
-        "iface": os.environ["IFACE"],
-        "network_prefix": os.environ["NETWORK_PREFIX"],
-        "out_json": Path(os.environ["OUT_JSON"]),
-        "out_md": Path(os.environ["OUT_MD"]),
-        "history_json": Path(os.environ["HISTORY_JSON"]),
-        "version": os.environ["VERSION"],
+        "iface": data["interface"],
+        "network_prefix": data["network_prefix"],
+        "out_json": base_dir / data["output_json"],
+        "out_md": base_dir / data["output_markdown"],
+        "history_json": base_dir / data["history_file"],
+        "version": data["version"],
         "base_dir": base_dir,
     }
-    cfg["vault"] = load_export_config(base_dir)
-    return cfg
-
-
-def load_export_config(base_dir: Path) -> dict:
-    cfg_path = base_dir / "config.json"
-    if not cfg_path.exists():
-        return {}
-    data = json.loads(cfg_path.read_text())
-    vault_path = Path(data["vault_path"])
-    systems_folder = data["systems_folder"]
-    return {
+    cfg["vault"] = {
         "config_path": cfg_path,
-        "vault_path": vault_path,
-        "systems_folder": systems_folder,
+        "vault_path": Path(data["vault_path"]),
+        "systems_folder": data["systems_folder"],
         "version": data.get("version"),
     }
+    return cfg
 
 
 def load_history(path: Path) -> dict:
@@ -195,23 +185,94 @@ def slug_ip(ip: str) -> str:
     return ip.replace('.', '-')
 
 
-def write_obsidian_exports(vault_cfg: dict, payload: dict) -> None:
+def slug_mac(mac: str | None) -> str | None:
+    if not mac:
+        return None
+    return mac.replace(':', '-').lower()
+
+
+def device_note_name(device: dict) -> str:
+    mac_slug = slug_mac(device.get("mac"))
+    if mac_slug:
+        return mac_slug
+    return f"ip-{slug_ip(device.get('ip') or 'unknown')}"
+
+
+def write_overview_markdown_with_links(path: Path, payload: dict) -> None:
+    rows = [
+        f"# Network Scan {payload['version']}",
+        "",
+        f"- **Network:** `{payload['network']}`",
+        f"- **Scanned at:** `{payload['scanned_at']}`",
+        f"- **Count:** `{payload['count']}`",
+        f"- **Method:** {payload['scan_method']}",
+        "",
+        "| Device | IP | MAC | Hostname | Manufacturer | State | First Seen | Last Seen |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for d in payload["devices"]:
+        note = f"devices/{device_note_name(d)}"
+        rows.append(
+            f"| [[{note}]] | {d.get('ip') or ''} | {d.get('mac') or ''} | {d.get('hostname') or ''} | {d.get('manufacturer') or ''} | {d.get('state') or ''} | {d.get('first_seen') or ''} | {d.get('last_seen') or ''} |"
+        )
+    path.write_text("\n".join(rows) + "\n")
+
+
+def build_scan_diff(previous_payload: dict | None, current_payload: dict) -> dict:
+    prev_devices = {d.get('ip'): d for d in (previous_payload or {}).get('devices', []) if d.get('ip')}
+    curr_devices = {d.get('ip'): d for d in current_payload.get('devices', []) if d.get('ip')}
+
+    prev_ips = set(prev_devices)
+    curr_ips = set(curr_devices)
+
+    new_ips = sorted(curr_ips - prev_ips, key=lambda x: tuple(map(int, x.split('.'))))
+    lost_ips = sorted(prev_ips - curr_ips, key=lambda x: tuple(map(int, x.split('.'))))
+
+    changed = []
+    for ip in sorted(prev_ips & curr_ips, key=lambda x: tuple(map(int, x.split('.')))):
+        before = prev_devices[ip]
+        after = curr_devices[ip]
+        fields = []
+        for key in ("hostname", "manufacturer", "mac", "state"):
+            if (before.get(key) or "") != (after.get(key) or ""):
+                fields.append({"field": key, "before": before.get(key), "after": after.get(key)})
+        if fields:
+            changed.append({"ip": ip, "fields": fields})
+
+    return {
+        "previous_scanned_at": (previous_payload or {}).get("scanned_at"),
+        "current_scanned_at": current_payload.get("scanned_at"),
+        "previous_count": len(prev_ips),
+        "current_count": len(curr_ips),
+        "new": [{"ip": ip, **curr_devices[ip]} for ip in new_ips],
+        "lost": [{"ip": ip, **prev_devices[ip]} for ip in lost_ips],
+        "changed": changed,
+    }
+
+
+def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dict | None = None) -> None:
     if not vault_cfg:
         return
 
     base = Path(vault_cfg["vault_path"]) / vault_cfg["systems_folder"]
     devices_dir = base / "devices"
     reports_dir = base / "reports"
+    diffs_dir = reports_dir / "diffs"
     devices_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
+    diffs_dir.mkdir(parents=True, exist_ok=True)
 
-    # overview markdown based on devices.json data
+    # overview markdown with links to per-device notes
     overview = base / "devices-overview.md"
-    write_markdown(overview, payload)
+    write_overview_markdown_with_links(overview, payload)
+
+    # replace generated device note set each run to avoid stale entries
+    for existing in devices_dir.glob("*.md"):
+        existing.unlink()
 
     # one file per system with front matter
     for d in payload["devices"]:
-        p = devices_dir / f"{slug_ip(d['ip'])}.md"
+        p = devices_dir / f"{device_note_name(d)}.md"
         fm = [
             "---",
             f"ip: {d.get('ip')}",
@@ -233,37 +294,201 @@ def write_obsidian_exports(vault_cfg: dict, payload: dict) -> None:
         ]
         p.write_text("\n".join(fm) + "\n")
 
-    # base reports
-    by_state = Counter(d.get("state") or "unknown" for d in payload["devices"])
-    by_mfg = Counter(d.get("manufacturer") or "unknown" for d in payload["devices"])
-    new_this_scan = [d for d in payload["devices"] if d.get("first_seen") == payload["scanned_at"]]
+    # Obsidian Bases reports (using device front matter)
+    devices_folder = f"{vault_cfg['systems_folder']}/devices"
 
-    (reports_dir / "by-state.md").write_text(
-        "# Report: Devices by State\n\n" +
-        "\n".join(f"- **{k}**: {v}" for k, v in sorted(by_state.items())) + "\n"
+    (reports_dir / "all-devices.base").write_text(
+        "filters:\n"
+        "  and:\n"
+        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - file.ext == \"md\"\n"
+        "views:\n"
+        "  - type: table\n"
+        "    name: All Devices\n"
+        "    order:\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - ip\n"
+        "    properties:\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - ip\n"
+        "      - mac\n"
+        "      - state\n"
+        "      - first_seen\n"
+        "      - last_seen\n"
+        "      - file.path\n"
     )
 
-    (reports_dir / "by-manufacturer.md").write_text(
-        "# Report: Devices by Manufacturer\n\n" +
-        "\n".join(f"- **{k}**: {v}" for k, v in by_mfg.most_common()) + "\n"
+    (reports_dir / "by-state.base").write_text(
+        "filters:\n"
+        "  and:\n"
+        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - file.ext == \"md\"\n"
+        "views:\n"
+        "  - type: table\n"
+        "    name: Devices by State\n"
+        "    groupBy:\n"
+        "      property: state\n"
+        "      direction: ASC\n"
+        "    order:\n"
+        "      - state\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - ip\n"
+        "    properties:\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - ip\n"
+        "      - mac\n"
+        "      - state\n"
+        "      - last_seen\n"
+        "      - file.path\n"
     )
+
+    (reports_dir / "by-manufacturer.base").write_text(
+        "filters:\n"
+        "  and:\n"
+        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - file.ext == \"md\"\n"
+        "views:\n"
+        "  - type: table\n"
+        "    name: Devices by Manufacturer\n"
+        "    groupBy:\n"
+        "      property: manufacturer\n"
+        "      direction: ASC\n"
+        "    order:\n"
+        "      - manufacturer\n"
+        "      - hostname\n"
+        "      - ip\n"
+        "    properties:\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - ip\n"
+        "      - mac\n"
+        "      - state\n"
+        "      - last_seen\n"
+        "      - file.path\n"
+    )
+
+    (reports_dir / "new-this-scan.base").write_text(
+        "filters:\n"
+        "  and:\n"
+        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - file.ext == \"md\"\n"
+        f"    - first_seen == \"{payload['scanned_at']}\"\n"
+        "views:\n"
+        "  - type: table\n"
+        "    name: New This Scan\n"
+        "    order:\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - ip\n"
+        "    properties:\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - ip\n"
+        "      - mac\n"
+        "      - first_seen\n"
+        "      - file.path\n"
+    )
+
+    (reports_dir / "by-first-seen.base").write_text(
+        "filters:\n"
+        "  and:\n"
+        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - file.ext == \"md\"\n"
+        "views:\n"
+        "  - type: table\n"
+        "    name: Devices by First Seen\n"
+        "    groupBy:\n"
+        "      property: first_seen\n"
+        "      direction: ASC\n"
+        "    order:\n"
+        "      - first_seen\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - ip\n"
+        "    properties:\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - first_seen\n"
+        "      - ip\n"
+        "      - mac\n"
+        "      - state\n"
+        "      - file.path\n"
+    )
+
+    (reports_dir / "by-last-seen.base").write_text(
+        "filters:\n"
+        "  and:\n"
+        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - file.ext == \"md\"\n"
+        "views:\n"
+        "  - type: table\n"
+        "    name: Devices by Last Seen\n"
+        "    groupBy:\n"
+        "      property: last_seen\n"
+        "      direction: DESC\n"
+        "    order:\n"
+        "      - last_seen\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - ip\n"
+        "    properties:\n"
+        "      - hostname\n"
+        "      - manufacturer\n"
+        "      - last_seen\n"
+        "      - ip\n"
+        "      - mac\n"
+        "      - state\n"
+        "      - file.path\n"
+    )
+
+    # per-run diff log
+    diff = build_scan_diff(previous_payload, payload)
+    stamp = payload["scanned_at"].replace(":", "").replace("+", "_plus_")
+    diff_path = diffs_dir / f"scan-diff-{stamp}.md"
 
     lines = [
-        "# Report: New Devices This Scan",
+        "# Scan Diff",
         "",
-        f"Scan timestamp: `{payload['scanned_at']}`",
-        f"Count: **{len(new_this_scan)}**",
+        f"- Previous scan: `{diff.get('previous_scanned_at')}`",
+        f"- Current scan: `{diff.get('current_scanned_at')}`",
+        f"- Device count: **{diff.get('previous_count')} -> {diff.get('current_count')}**",
         "",
+        f"## New Devices ({len(diff['new'])})",
     ]
-    for d in new_this_scan:
-        lines.append(f"- `{d['ip']}` · {d.get('hostname') or 'unknown'} · {d.get('manufacturer') or 'unknown'}")
-    (reports_dir / "new-this-scan.md").write_text("\n".join(lines) + "\n")
+    for d in diff["new"]:
+        lines.append(f"- `{d.get('ip')}` · {d.get('hostname') or 'unknown'} · {d.get('manufacturer') or 'unknown'}")
+
+    lines.append("")
+    lines.append(f"## Lost Devices ({len(diff['lost'])})")
+    for d in diff["lost"]:
+        lines.append(f"- `{d.get('ip')}` · {d.get('hostname') or 'unknown'} · {d.get('manufacturer') or 'unknown'}")
+
+    lines.append("")
+    lines.append(f"## Changed Devices ({len(diff['changed'])})")
+    for c in diff["changed"]:
+        lines.append(f"- `{c['ip']}`")
+        for f in c["fields"]:
+            lines.append(f"  - {f['field']}: `{f.get('before')}` -> `{f.get('after')}`")
+
+    diff_path.write_text("\n".join(lines) + "\n")
+    (reports_dir / "latest-diff.md").write_text("\n".join(lines) + "\n")
 
 
 
 def main() -> None:
     cfg = get_env_config()
     ts = now_iso()
+
+    previous_payload = None
+    if cfg["out_json"].exists():
+        try:
+            previous_payload = json.loads(cfg["out_json"].read_text())
+        except Exception:
+            previous_payload = None
 
     history = load_history(cfg["history_json"])
     oui_map = load_oui_map()
@@ -274,7 +499,7 @@ def main() -> None:
     cfg["out_json"].write_text(json.dumps(payload, indent=2))
     save_history(cfg["history_json"], cfg["version"], ts, updated_history)
     write_markdown(cfg["out_md"], payload)
-    write_obsidian_exports(cfg.get("vault", {}), payload)
+    write_obsidian_exports(cfg.get("vault", {}), payload, previous_payload)
 
     print(str(cfg["out_json"]))
     print(str(cfg["out_md"]))
