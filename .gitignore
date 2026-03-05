@@ -1,6 +1,5 @@
-devices.json
-devices.md
-.scan_history.json
+*.json
+*.md
 __pycache__/
 vault
 
