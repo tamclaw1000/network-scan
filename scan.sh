@@ -47,7 +47,7 @@ seq "$SCAN_START" "$SCAN_END" | xargs -I{} -P "$PING_PARALLELISM" sh -c \
 
 # 2) Build enriched JSON + Markdown + vault exports
 export IFACE NETWORK_PREFIX OUT_JSON OUT_MD HISTORY_JSON VERSION
-python3 "${BASE_DIR}/scan.py"
+uv run "${BASE_DIR}/scan.py"
 
 echo "Wrote ${OUT_JSON}"
 echo "Wrote ${OUT_MD}"

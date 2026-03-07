@@ -1,5 +1,5 @@
 {
-  "version": "v00.02.00",
+  "version": "00.03.00",
   "network_prefix": "192.168.1",
   "interface": "eth0",
   "scan_range_start": 1,
@@ -11,5 +11,18 @@
   "output_markdown": "devices.md",
   "history_file": ".scan_history.json",
   "vault_path": "/home/tamclaw/.openclaw/workspace/TamClawVault",
-  "systems_folder": "systems/homenetwork"
+  "systems_folder": "systems/homenetwork",
+  "uptime_kuma": {
+    "enabled": true,
+    "url": "http://linuxpc03:9333",
+    "username": "mwt",
+    "password": "kuma123",
+    "default_monitor_type": "ping",
+    "default_interval": 60,
+    "default_retry_interval": 60,
+    "default_max_retries": 3,
+    "default_timeout": 48,
+    "ensure_tag_name": "server",
+    "ensure_tag_color": "#2563eb"
+  }
 }

@@ -1,4 +1,10 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# dependencies = [
+#   "uptime-kuma-api-v2"
+# ]
+# ///
+
 import datetime
 import json
 import socket
@@ -96,6 +102,21 @@ def get_env_config() -> dict:
         "vault_path": Path(data["vault_path"]),
         "systems_folder": data["systems_folder"],
         "version": data.get("version"),
+    }
+
+    uptime_kuma = data.get("uptime_kuma", {})
+    cfg["uptime_kuma"] = {
+        "enabled": bool(uptime_kuma.get("enabled", False)),
+        "url": uptime_kuma.get("url"),
+        "username": uptime_kuma.get("username"),
+        "password": uptime_kuma.get("password"),
+        "default_monitor_type": uptime_kuma.get("default_monitor_type", "ping"),
+        "default_interval": int(uptime_kuma.get("default_interval", 60)),
+        "default_retry_interval": int(uptime_kuma.get("default_retry_interval", 60)),
+        "default_max_retries": int(uptime_kuma.get("default_max_retries", 3)),
+        "default_timeout": int(uptime_kuma.get("default_timeout", 48)),
+        "ensure_tag_name": uptime_kuma.get("ensure_tag_name", "server"),
+        "ensure_tag_color": uptime_kuma.get("ensure_tag_color", "#2563eb"),
     }
     return cfg
 
@@ -458,7 +479,100 @@ def write_uptime_kuma_backup(base_dir: Path, payload: dict) -> Path:
     return out_path
 
 
-def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dict | None = None) -> None:
+def import_into_uptime_kuma_from_backup(cfg: dict, backup_json_path: Path) -> dict:
+    """Import devices from generated backup into Uptime Kuma as monitors.
+
+    Mirrors the standalone `import-into-uptime-kuma.py` behavior while using
+    parameters from config.json.
+    """
+    kuma_cfg = cfg.get("uptime_kuma", {})
+    if not kuma_cfg.get("enabled"):
+        return {"enabled": False, "added": 0, "skipped": 0, "failed": 0}
+
+    try:
+        from uptime_kuma_api import UptimeKumaApi, MonitorType
+    except Exception as e:
+        return {
+            "enabled": True,
+            "added": 0,
+            "skipped": 0,
+            "failed": 0,
+            "error": f"uptime_kuma_api import failed: {e}",
+        }
+
+    url = kuma_cfg.get("url")
+    username = kuma_cfg.get("username")
+    password = kuma_cfg.get("password")
+    if not url or not username or not password:
+        return {
+            "enabled": True,
+            "added": 0,
+            "skipped": 0,
+            "failed": 0,
+            "error": "missing uptime_kuma.url/username/password in config.json",
+        }
+
+    def get_or_create_tag(api, name: str, color: str):
+        try:
+            tags = api.get_tags()
+            for t in tags:
+                if t.get("name") == name:
+                    return t
+            return api.add_tag(name=name, color=color)
+        except Exception:
+            return None
+
+    monitors_data = json.loads(backup_json_path.read_text()).get("monitorList", [])
+    added = skipped = failed = 0
+
+    with UptimeKumaApi(url) as api:
+        api.login(username, password)
+
+        tag_name = kuma_cfg.get("ensure_tag_name")
+        tag_color = kuma_cfg.get("ensure_tag_color", "#2563eb")
+        if tag_name:
+            get_or_create_tag(api, tag_name, tag_color)
+
+        existing = api.get_monitors()
+        existing_hosts = {m.get("hostname") for m in existing if m.get("hostname")}
+
+        for m in monitors_data:
+            hostname = m.get("hostname")
+            name = m.get("name") or hostname
+            if not hostname:
+                skipped += 1
+                continue
+            if hostname in existing_hosts:
+                skipped += 1
+                continue
+
+            try:
+                monitor_type = (kuma_cfg.get("default_monitor_type") or "ping").lower()
+                monitor_enum = MonitorType.PING if monitor_type == "ping" else MonitorType.PING
+
+                api.add_monitor(
+                    type=monitor_enum,
+                    name=name,
+                    hostname=hostname,
+                    interval=int(m.get("interval") or kuma_cfg.get("default_interval", 60)),
+                    retryInterval=int(m.get("retryInterval") or kuma_cfg.get("default_retry_interval", 60)),
+                    maxretries=int(m.get("maxretries") or kuma_cfg.get("default_max_retries", 3)),
+                    timeout=int(m.get("timeout") or kuma_cfg.get("default_timeout", 48)),
+                )
+                existing_hosts.add(hostname)
+                added += 1
+            except Exception:
+                failed += 1
+
+    return {"enabled": True, "added": added, "skipped": skipped, "failed": failed}
+
+
+def write_obsidian_exports(
+    vault_cfg: dict,
+    payload: dict,
+    previous_payload: dict | None = None,
+    history_devices: dict | None = None,
+) -> None:
     if not vault_cfg:
         return
 
@@ -470,16 +584,39 @@ def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dic
     reports_dir.mkdir(parents=True, exist_ok=True)
     diffs_dir.mkdir(parents=True, exist_ok=True)
 
+    # Build export set: keep historical devices, mark unseen ones as offline
+    history_devices = history_devices or {}
+    current_by_ip = {d.get("ip"): d for d in payload["devices"] if d.get("ip")}
+
+    export_devices = []
+    for ip, h in history_devices.items():
+        cur = current_by_ip.get(ip, {})
+        d = {
+            "ip": ip,
+            "mac": cur.get("mac") or h.get("mac"),
+            "hostname": cur.get("hostname") or h.get("hostname"),
+            "manufacturer": cur.get("manufacturer") or h.get("manufacturer"),
+            "state": cur.get("state") or "offline",
+            "first_seen": h.get("first_seen") or cur.get("first_seen") or payload["scanned_at"],
+            "last_seen": h.get("last_seen") or cur.get("last_seen") or payload["scanned_at"],
+        }
+        export_devices.append(d)
+
+    # fallback for first run without history map
+    if not export_devices:
+        export_devices = list(payload["devices"])
+
+    export_devices.sort(key=lambda d: tuple(map(int, (d.get("ip") or "0.0.0.0").split("."))))
+    export_payload = dict(payload)
+    export_payload["devices"] = export_devices
+    export_payload["count"] = len(export_devices)
+
     # overview markdown with links to per-device notes
     overview = base / "devices-overview.md"
-    write_overview_markdown_with_links(overview, payload)
+    write_overview_markdown_with_links(overview, export_payload)
 
-    # replace generated device note set each run to avoid stale entries
-    for existing in devices_dir.glob("*.md"):
-        existing.unlink()
-
-    # one file per system with front matter
-    for d in payload["devices"]:
+    # one file per system with front matter (do not delete missing devices)
+    for d in export_devices:
         p = devices_dir / f"{device_note_name(d)}.md"
         fm = [
             "---",
@@ -506,11 +643,14 @@ def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dic
 
     # Obsidian Bases reports (using device front matter)
     devices_folder = f"{vault_cfg['systems_folder']}/devices"
+    devices_folder_alt = "21 - Claw/systems/homenetwork/devices"
 
     (reports_dir / "all-devices.base").write_text(
         "filters:\n"
         "  and:\n"
-        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - or:\n"
+        f"        - file.inFolder(\"{devices_folder}\")\n"
+        f"        - file.inFolder(\"{devices_folder_alt}\")\n"
         "    - file.ext == \"md\"\n"
         "views:\n"
         "  - type: table\n"
@@ -533,7 +673,9 @@ def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dic
     (reports_dir / "by-state.base").write_text(
         "filters:\n"
         "  and:\n"
-        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - or:\n"
+        f"        - file.inFolder(\"{devices_folder}\")\n"
+        f"        - file.inFolder(\"{devices_folder_alt}\")\n"
         "    - file.ext == \"md\"\n"
         "views:\n"
         "  - type: table\n"
@@ -559,7 +701,9 @@ def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dic
     (reports_dir / "by-manufacturer.base").write_text(
         "filters:\n"
         "  and:\n"
-        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - or:\n"
+        f"        - file.inFolder(\"{devices_folder}\")\n"
+        f"        - file.inFolder(\"{devices_folder_alt}\")\n"
         "    - file.ext == \"md\"\n"
         "views:\n"
         "  - type: table\n"
@@ -584,7 +728,9 @@ def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dic
     (reports_dir / "new-this-scan.base").write_text(
         "filters:\n"
         "  and:\n"
-        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - or:\n"
+        f"        - file.inFolder(\"{devices_folder}\")\n"
+        f"        - file.inFolder(\"{devices_folder_alt}\")\n"
         "    - file.ext == \"md\"\n"
         f"    - first_seen == \"{payload['scanned_at']}\"\n"
         "views:\n"
@@ -606,14 +752,16 @@ def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dic
     (reports_dir / "by-first-seen.base").write_text(
         "filters:\n"
         "  and:\n"
-        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - or:\n"
+        f"        - file.inFolder(\"{devices_folder}\")\n"
+        f"        - file.inFolder(\"{devices_folder_alt}\")\n"
         "    - file.ext == \"md\"\n"
         "views:\n"
         "  - type: table\n"
         "    name: Devices by First Seen\n"
         "    groupBy:\n"
         "      property: first_seen\n"
-        "      direction: ASC\n"
+        "      direction: DESC\n"
         "    order:\n"
         "      - first_seen\n"
         "      - hostname\n"
@@ -632,14 +780,16 @@ def write_obsidian_exports(vault_cfg: dict, payload: dict, previous_payload: dic
     (reports_dir / "by-last-seen.base").write_text(
         "filters:\n"
         "  and:\n"
-        f"    - file.inFolder(\"{devices_folder}\")\n"
+        "    - or:\n"
+        f"        - file.inFolder(\"{devices_folder}\")\n"
+        f"        - file.inFolder(\"{devices_folder_alt}\")\n"
         "    - file.ext == \"md\"\n"
         "views:\n"
         "  - type: table\n"
         "    name: Devices by Last Seen\n"
         "    groupBy:\n"
         "      property: last_seen\n"
-        "      direction: DESC\n"
+        "      direction: ASC\n"
         "    order:\n"
         "      - last_seen\n"
         "      - hostname\n"
@@ -710,8 +860,14 @@ def main() -> None:
     cfg["out_json"].write_text(json.dumps(payload, indent=2))
     save_history(cfg["history_json"], cfg["version"], ts, updated_history)
     write_markdown(cfg["out_md"], payload)
-    write_obsidian_exports(cfg.get("vault", {}), payload, previous_payload)
+    write_obsidian_exports(
+        cfg.get("vault", {}),
+        payload,
+        previous_payload,
+        history_devices=updated_history,
+    )
     kuma_backup_path = write_uptime_kuma_backup(cfg["base_dir"], payload)
+    kuma_import_result = import_into_uptime_kuma_from_backup(cfg, kuma_backup_path)
 
     print(str(cfg["out_json"]))
     print(str(cfg["out_md"]))
@@ -720,6 +876,16 @@ def main() -> None:
         base = Path(cfg["vault"]["vault_path"]) / cfg["vault"]["systems_folder"]
         print(str(base))
     print(payload["count"])
+    if kuma_import_result.get("enabled"):
+        if kuma_import_result.get("error"):
+            print(f"Uptime Kuma import error: {kuma_import_result['error']}")
+        else:
+            print(
+                "Uptime Kuma import: "
+                f"added={kuma_import_result['added']} "
+                f"skipped={kuma_import_result['skipped']} "
+                f"failed={kuma_import_result['failed']}"
+            )
 
 
 if __name__ == "__main__":
