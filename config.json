@@ -1,5 +1,5 @@
 {
-  "version": "00.04.00",
+  "version": "1.0",
   "network_prefix": "192.168.1",
   "interface": "eth0",
   "scan_range_start": 1,

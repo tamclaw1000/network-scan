@@ -1,5 +1,4 @@
 *.json
-*.md
 __pycache__/
 vault
 

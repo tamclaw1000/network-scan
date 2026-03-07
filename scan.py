@@ -16,11 +16,13 @@ FAILED_STATES = {"FAILED", "INCOMPLETE"}
 
 
 def _add_tag(tags: list[str], tag: str | None) -> None:
+    """Add tag to list if non-empty and not already present."""
     if tag and tag not in tags:
         tags.append(tag)
 
 
 def build_uptime_kuma_tags(ip: str | None, name: str | None, manufacturer: str | None) -> list[str]:
+    """Derive semantic Uptime Kuma tags from IP, hostname, and manufacturer hints."""
     n = (name or "").lower()
     m = (manufacturer or "").lower()
     tags: list[str] = []
@@ -81,10 +83,12 @@ def build_uptime_kuma_tags(ip: str | None, name: str | None, manufacturer: str |
 
 
 def now_iso() -> str:
+    """Return current local timestamp in ISO-8601 format."""
     return datetime.datetime.now().astimezone().isoformat()
 
 
 def get_env_config() -> dict:
+    """Load config.json and resolve host-scoped runtime paths and feature settings."""
     base_dir = Path(__file__).resolve().parent
     cfg_path = base_dir / "config.json"
     data = json.loads(cfg_path.read_text())
@@ -97,6 +101,11 @@ def get_env_config() -> dict:
     cfg = {
         "iface": data["interface"],
         "network_prefix": data["network_prefix"],
+        "scan_range_start": int(data["scan_range_start"]),
+        "scan_range_end": int(data["scan_range_end"]),
+        "ping_count": int(data["ping_count"]),
+        "ping_timeout_seconds": int(data["ping_timeout_seconds"]),
+        "ping_parallelism": int(data["ping_parallelism"]),
         "out_json": runtime_dir / data["output_json"],
         "out_md": runtime_dir / data["output_markdown"],
         "history_json": runtime_dir / data["history_file"],
@@ -118,6 +127,7 @@ def get_env_config() -> dict:
 
 
 def load_history(path: Path) -> dict:
+    """Load historical device map from history file with safe fallback."""
     if not path.exists():
         return {}
     try:
@@ -128,6 +138,7 @@ def load_history(path: Path) -> dict:
 
 
 def save_history(path: Path, version: str, ts: str, devices_map: dict) -> None:
+    """Persist device history payload to disk."""
     payload = {"version": version, "updated_at": ts, "devices": devices_map}
     path.write_text(json.dumps(payload, indent=2))
 
@@ -148,6 +159,7 @@ def load_additional_devices_map(items: list[dict] | None) -> dict[str, str]:
 
 
 def load_oui_map() -> dict:
+    """Load MAC OUI vendor mapping from system OUI files."""
     candidates = [Path("/usr/share/ieee-data/oui.txt"), Path("/usr/share/misc/oui.txt")]
     oui = {}
     for path in candidates:
@@ -170,12 +182,14 @@ def load_oui_map() -> dict:
 
 
 def normalize_mac(mac: str | None) -> str | None:
+    """Normalize MAC to uppercase hex without separators."""
     if not mac:
         return None
     return mac.replace(":", "").replace("-", "").upper()
 
 
 def vendor_for_mac(mac: str | None, oui_map: dict) -> str | None:
+    """Resolve vendor from normalized MAC prefix using OUI map."""
     normalized = normalize_mac(mac)
     if not normalized or len(normalized) < 6:
         return None
@@ -183,6 +197,7 @@ def vendor_for_mac(mac: str | None, oui_map: dict) -> str | None:
 
 
 def resolve_hostname(ip: str) -> str | None:
+    """Resolve reverse DNS hostname for an IP if available."""
     try:
         name, _, _ = socket.gethostbyaddr(ip)
         return name
@@ -191,6 +206,7 @@ def resolve_hostname(ip: str) -> str | None:
 
 
 def parse_neighbor_line(line: str) -> dict | None:
+    """Parse a single ip neigh line into {ip, mac, state}."""
     line = line.strip()
     if not line:
         return None
@@ -206,7 +222,33 @@ def parse_neighbor_line(line: str) -> dict | None:
     return {"ip": ip, "mac": mac, "state": state}
 
 
+def run_ping_sweep(cfg: dict) -> None:
+    """Perform parallel ping sweep to warm neighbor cache before collection."""
+    prefix = cfg["network_prefix"]
+    start = cfg["scan_range_start"]
+    end = cfg["scan_range_end"]
+    ping_count = str(cfg["ping_count"])
+    timeout = str(cfg["ping_timeout_seconds"])
+    parallel = max(1, int(cfg.get("ping_parallelism", 64)))
+
+    ips = [f"{prefix}.{host}" for host in range(start, end + 1)]
+
+    def ping_one(ip: str) -> None:
+        subprocess.run(
+            ["ping", "-c", ping_count, "-W", timeout, ip],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=parallel) as ex:
+        list(ex.map(ping_one, ips))
+
+
 def collect_devices(iface: str, history: dict, oui_map: dict, additional_name_map: dict, ts: str) -> tuple[list, dict]:
+    """Collect and enrich devices from neighbor table and update history fields."""
     raw = subprocess.check_output(["ip", "neigh", "show", "dev", iface], text=True)
     devices = []
     updated_history = dict(history)
@@ -253,6 +295,7 @@ def collect_devices(iface: str, history: dict, oui_map: dict, additional_name_ma
 
 
 def build_payload(version: str, network_prefix: str, ts: str, devices: list) -> dict:
+    """Build top-level scan payload object."""
     return {
         "version": version,
         "network": f"{network_prefix}.0/24",
@@ -264,6 +307,7 @@ def build_payload(version: str, network_prefix: str, ts: str, devices: list) -> 
 
 
 def write_markdown(path: Path, payload: dict) -> None:
+    """Write human-readable markdown table for current scan payload."""
     rows = [
         f"# Network Scan {payload['version']}",
         "",
@@ -284,16 +328,19 @@ def write_markdown(path: Path, payload: dict) -> None:
 
 
 def slug_ip(ip: str) -> str:
+    """Convert IP address into filename-safe slug."""
     return ip.replace('.', '-')
 
 
 def slug_mac(mac: str | None) -> str | None:
+    """Convert MAC address into filename-safe slug."""
     if not mac:
         return None
     return mac.replace(':', '-').lower()
 
 
 def device_note_name(device: dict) -> str:
+    """Return stable device note key (MAC preferred, IP fallback)."""
     mac_slug = slug_mac(device.get("mac"))
     if mac_slug:
         return mac_slug
@@ -301,6 +348,7 @@ def device_note_name(device: dict) -> str:
 
 
 def write_overview_markdown_with_links(path: Path, payload: dict) -> None:
+    """Write overview markdown with wiki-links to per-device notes."""
     rows = [
         f"# Network Scan {payload['version']}",
         "",
@@ -322,6 +370,7 @@ def write_overview_markdown_with_links(path: Path, payload: dict) -> None:
 
 
 def build_scan_diff(previous_payload: dict | None, current_payload: dict) -> dict:
+    """Compute new/lost/changed device differences between scans."""
     prev_devices = {d.get('ip'): d for d in (previous_payload or {}).get('devices', []) if d.get('ip')}
     curr_devices = {d.get('ip'): d for d in current_payload.get('devices', []) if d.get('ip')}
 
@@ -437,6 +486,7 @@ def write_obsidian_exports(
     previous_payload: dict | None = None,
     history_devices: dict | None = None,
 ) -> None:
+    """Write per-device notes, Bases reports, and scan diff markdown exports."""
     if not vault_cfg:
         return
 
@@ -704,6 +754,7 @@ def write_obsidian_exports(
 
 
 def main() -> None:
+    """Run end-to-end scan workflow: sweep, collect, export, and Kuma import."""
     cfg = get_env_config()
     ts = now_iso()
 
@@ -718,6 +769,7 @@ def main() -> None:
     oui_map = load_oui_map()
     additional_name_map = load_additional_devices_map(cfg.get("additional_devices"))
 
+    run_ping_sweep(cfg)
     devices, updated_history = collect_devices(cfg["iface"], history, oui_map, additional_name_map, ts)
     payload = build_payload(cfg["version"], cfg["network_prefix"], ts, devices)
 

@@ -1,0 +1,3 @@
+# homenetwork scan hourly sync
+# minute hour day month day_of_week command
+5 * * * * /home/tamclaw/.openclaw/workspace-darren/projects/homenetwork/scan/hourly_scan_sync.sh
