@@ -6,6 +6,7 @@
 # ///
 
 import datetime
+import os
 import json
 import socket
 import subprocess
@@ -104,20 +105,8 @@ def get_env_config() -> dict:
         "version": data.get("version"),
     }
 
-    uptime_kuma = data.get("uptime_kuma", {})
-    cfg["uptime_kuma"] = {
-        "enabled": bool(uptime_kuma.get("enabled", False)),
-        "url": uptime_kuma.get("url"),
-        "username": uptime_kuma.get("username"),
-        "password": uptime_kuma.get("password"),
-        "default_monitor_type": uptime_kuma.get("default_monitor_type", "ping"),
-        "default_interval": int(uptime_kuma.get("default_interval", 60)),
-        "default_retry_interval": int(uptime_kuma.get("default_retry_interval", 60)),
-        "default_max_retries": int(uptime_kuma.get("default_max_retries", 3)),
-        "default_timeout": int(uptime_kuma.get("default_timeout", 48)),
-        "ensure_tag_name": uptime_kuma.get("ensure_tag_name", "server"),
-        "ensure_tag_color": uptime_kuma.get("ensure_tag_color", "#2563eb"),
-    }
+    cfg["additional_devices"] = data.get("additional_devices", [])
+    cfg["uptime_kuma"] = data.get("uptime_kuma", {})
     return cfg
 
 
@@ -136,24 +125,19 @@ def save_history(path: Path, version: str, ts: str, devices_map: dict) -> None:
     path.write_text(json.dumps(payload, indent=2))
 
 
-def load_additional_devices_map(path: Path) -> dict[str, str]:
-    """Load optional IP->name overrides from additional-devices.json."""
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text())
-        mapping = {}
-        if isinstance(data, list):
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                ip = (item.get("ip") or "").strip()
-                name = (item.get("name") or "").strip()
-                if ip and name:
-                    mapping[ip] = name
+def load_additional_devices_map(items: list[dict] | None) -> dict[str, str]:
+    """Load optional IP->name overrides from config additional_devices."""
+    mapping: dict[str, str] = {}
+    if not items or not isinstance(items, list):
         return mapping
-    except Exception:
-        return {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ip = (item.get("ip") or "").strip()
+        name = (item.get("name") or "").strip()
+        if ip and name:
+            mapping[ip] = name
+    return mapping
 
 
 def load_oui_map() -> dict:
@@ -362,132 +346,27 @@ def build_scan_diff(previous_payload: dict | None, current_payload: dict) -> dic
     }
 
 
-def write_uptime_kuma_backup(base_dir: Path, payload: dict) -> Path:
-    """Generate a Uptime Kuma backup JSON from current scan payload.
+def import_devices_into_uptime_kuma(payload: dict, kuma_cfg: dict) -> dict:
+    """Add missing scan devices into Uptime Kuma as ping monitors.
 
-    Output intentionally contains only flat ping monitors (no groups/tags)
-    to keep imports and diffs simple.
+    Uses config defaults + env.sh exported variables for sensitive values.
     """
-    stamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
-    out_path = base_dir / f"Uptime_Kuma_Backup_from_scan_{stamp}.json"
-
-    monitors = []
-    next_id = 1
-    for d in payload.get("devices", []):
-        ip = d.get("ip")
-        if not ip:
-            continue
-        name = (d.get("hostname") or "").strip() or ip
-        monitor_tags = [{"name": t, "value": t} for t in (d.get("uptime_kuma_tags") or [])]
-        monitors.append(
-            {
-                "id": next_id,
-                "name": name,
-                "description": None,
-                "pathName": name,
-                "parent": None,
-                "childrenIDs": [],
-                "url": None,
-                "method": "GET",
-                "hostname": ip,
-                "port": None,
-                "maxretries": 3,
-                "weight": 2000,
-                "active": True,
-                "forceInactive": False,
-                "type": "ping",
-                "timeout": 48,
-                "interval": 60,
-                "retryInterval": 60,
-                "resendInterval": 0,
-                "keyword": None,
-                "invertKeyword": False,
-                "expiryNotification": True,
-                "ignoreTls": False,
-                "upsideDown": False,
-                "packetSize": 56,
-                "maxredirects": 10,
-                "accepted_statuscodes": ["200-299"],
-                "dns_resolve_type": None,
-                "dns_resolve_server": None,
-                "dns_last_result": None,
-                "docker_container": None,
-                "docker_host": None,
-                "proxyId": None,
-                "notificationIDList": {},
-                "tags": monitor_tags,
-                "maintenance": False,
-                "mqttTopic": None,
-                "mqttSuccessMessage": None,
-                "databaseQuery": None,
-                "authMethod": None,
-                "grpcUrl": None,
-                "grpcProtobuf": None,
-                "grpcMethod": None,
-                "grpcServiceName": None,
-                "grpcEnableTls": False,
-                "radiusCalledStationId": None,
-                "radiusCallingStationId": None,
-                "game": None,
-                "gamedigGivenPortOnly": True,
-                "httpBodyEncoding": None,
-                "jsonPath": None,
-                "expectedValue": None,
-                "kafkaProducerTopic": None,
-                "kafkaProducerBrokers": None,
-                "kafkaProducerSsl": False,
-                "kafkaProducerAllowAutoTopicCreation": False,
-                "kafkaProducerMessage": None,
-                "screenshot": None,
-                "headers": None,
-                "body": None,
-                "grpcBody": None,
-                "grpcMetadata": None,
-                "basic_auth_user": None,
-                "basic_auth_pass": None,
-                "oauth_client_id": None,
-                "oauth_client_secret": None,
-                "oauth_token_url": None,
-                "oauth_scopes": None,
-                "oauth_auth_method": None,
-                "pushToken": None,
-                "databaseConnectionString": None,
-                "radiusUsername": None,
-                "radiusPassword": None,
-                "radiusSecret": None,
-                "mqttUsername": None,
-                "mqttPassword": None,
-                "authWorkstation": None,
-                "authDomain": None,
-                "tlsCa": None,
-                "tlsCert": None,
-                "tlsKey": None,
-                "kafkaProducerSaslOptions": None,
-                "includeSensitiveData": True,
-            }
-        )
-        next_id += 1
-
-    backup = {
-        "version": "1.23.13",
-        "notificationList": [],
-        "monitorList": monitors,
-    }
-
-    out_path.write_text(json.dumps(backup, indent=2))
-    (base_dir / "Uptime_Kuma_Backup_from_scan_latest.json").write_text(json.dumps(backup, indent=2))
-    return out_path
-
-
-def import_into_uptime_kuma_from_backup(cfg: dict, backup_json_path: Path) -> dict:
-    """Import devices from generated backup into Uptime Kuma as monitors.
-
-    Mirrors the standalone `import-into-uptime-kuma.py` behavior while using
-    parameters from config.json.
-    """
-    kuma_cfg = cfg.get("uptime_kuma", {})
-    if not kuma_cfg.get("enabled"):
+    enabled = bool(kuma_cfg.get("enabled", False))
+    if not enabled:
         return {"enabled": False, "added": 0, "skipped": 0, "failed": 0}
+
+    url = os.getenv("KUMA_URL") or kuma_cfg.get("url")
+    username = os.getenv("KUMA_USERNAME") or kuma_cfg.get("username")
+    password = os.getenv("KUMA_PASSWORD") or kuma_cfg.get("password")
+
+    if not url or not username or not password:
+        return {
+            "enabled": True,
+            "added": 0,
+            "skipped": 0,
+            "failed": 0,
+            "error": "missing KUMA_URL/KUMA_USERNAME/KUMA_PASSWORD (or config fallback)",
+        }
 
     try:
         from uptime_kuma_api import UptimeKumaApi, MonitorType
@@ -500,69 +379,47 @@ def import_into_uptime_kuma_from_backup(cfg: dict, backup_json_path: Path) -> di
             "error": f"uptime_kuma_api import failed: {e}",
         }
 
-    url = kuma_cfg.get("url")
-    username = kuma_cfg.get("username")
-    password = kuma_cfg.get("password")
-    if not url or not username or not password:
-        return {
-            "enabled": True,
-            "added": 0,
-            "skipped": 0,
-            "failed": 0,
-            "error": "missing uptime_kuma.url/username/password in config.json",
-        }
-
-    def get_or_create_tag(api, name: str, color: str):
-        try:
-            tags = api.get_tags()
-            for t in tags:
-                if t.get("name") == name:
-                    return t
-            return api.add_tag(name=name, color=color)
-        except Exception:
-            return None
-
-    monitors_data = json.loads(backup_json_path.read_text()).get("monitorList", [])
     added = skipped = failed = 0
 
-    with UptimeKumaApi(url) as api:
-        api.login(username, password)
+    try:
+        with UptimeKumaApi(url) as api:
+            api.login(username, password)
 
-        tag_name = kuma_cfg.get("ensure_tag_name")
-        tag_color = kuma_cfg.get("ensure_tag_color", "#2563eb")
-        if tag_name:
-            get_or_create_tag(api, tag_name, tag_color)
+            existing = api.get_monitors()
+            existing_hosts = {m.get("hostname") for m in existing if m.get("hostname")}
 
-        existing = api.get_monitors()
-        existing_hosts = {m.get("hostname") for m in existing if m.get("hostname")}
+            for d in payload.get("devices", []):
+                host = d.get("ip")
+                name = (d.get("hostname") or "").strip() or host
+                if not host:
+                    skipped += 1
+                    continue
+                if host in existing_hosts:
+                    skipped += 1
+                    continue
 
-        for m in monitors_data:
-            hostname = m.get("hostname")
-            name = m.get("name") or hostname
-            if not hostname:
-                skipped += 1
-                continue
-            if hostname in existing_hosts:
-                skipped += 1
-                continue
-
-            try:
-                monitor_type = (kuma_cfg.get("default_monitor_type") or "ping").lower()
-                monitor_enum = MonitorType.PING if monitor_type == "ping" else MonitorType.PING
-
-                api.add_monitor(
-                    type=monitor_enum,
-                    name=name,
-                    hostname=hostname,
-                    interval=int(m.get("interval") or kuma_cfg.get("default_interval", 60)),
-                    retryInterval=int(m.get("retryInterval") or kuma_cfg.get("default_retry_interval", 60)),
-                    maxretries=int(m.get("maxretries") or kuma_cfg.get("default_max_retries", 3)),
-                    timeout=int(m.get("timeout") or kuma_cfg.get("default_timeout", 48)),
-                )
-                existing_hosts.add(hostname)
-                added += 1
-            except Exception:
-                failed += 1
+                try:
+                    api.add_monitor(
+                        type=MonitorType.PING,
+                        name=name,
+                        hostname=host,
+                        interval=int(kuma_cfg.get("default_interval", 60)),
+                        retryInterval=int(kuma_cfg.get("default_retry_interval", 60)),
+                        maxretries=int(kuma_cfg.get("default_max_retries", 3)),
+                        timeout=int(kuma_cfg.get("default_timeout", 48)),
+                    )
+                    existing_hosts.add(host)
+                    added += 1
+                except Exception:
+                    failed += 1
+    except Exception as e:
+        return {
+            "enabled": True,
+            "added": added,
+            "skipped": skipped,
+            "failed": failed,
+            "error": f"uptime kuma login/import failed: {e}",
+        }
 
     return {"enabled": True, "added": added, "skipped": skipped, "failed": failed}
 
@@ -852,7 +709,7 @@ def main() -> None:
 
     history = load_history(cfg["history_json"])
     oui_map = load_oui_map()
-    additional_name_map = load_additional_devices_map(cfg["base_dir"] / "additional-devices.json")
+    additional_name_map = load_additional_devices_map(cfg.get("additional_devices"))
 
     devices, updated_history = collect_devices(cfg["iface"], history, oui_map, additional_name_map, ts)
     payload = build_payload(cfg["version"], cfg["network_prefix"], ts, devices)
@@ -866,25 +723,25 @@ def main() -> None:
         previous_payload,
         history_devices=updated_history,
     )
-    kuma_backup_path = write_uptime_kuma_backup(cfg["base_dir"], payload)
-    kuma_import_result = import_into_uptime_kuma_from_backup(cfg, kuma_backup_path)
+
+    kuma_result = import_devices_into_uptime_kuma(payload, cfg.get("uptime_kuma", {}))
 
     print(str(cfg["out_json"]))
     print(str(cfg["out_md"]))
-    print(str(kuma_backup_path))
     if cfg.get("vault"):
         base = Path(cfg["vault"]["vault_path"]) / cfg["vault"]["systems_folder"]
         print(str(base))
     print(payload["count"])
-    if kuma_import_result.get("enabled"):
-        if kuma_import_result.get("error"):
-            print(f"Uptime Kuma import error: {kuma_import_result['error']}")
+
+    if kuma_result.get("enabled"):
+        if kuma_result.get("error"):
+            print(f"Uptime Kuma import error: {kuma_result['error']}")
         else:
             print(
                 "Uptime Kuma import: "
-                f"added={kuma_import_result['added']} "
-                f"skipped={kuma_import_result['skipped']} "
-                f"failed={kuma_import_result['failed']}"
+                f"added={kuma_result['added']} "
+                f"skipped={kuma_result['skipped']} "
+                f"failed={kuma_result['failed']}"
             )
 
 

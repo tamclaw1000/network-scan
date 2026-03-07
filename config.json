@@ -1,5 +1,5 @@
 {
-  "version": "00.03.00",
+  "version": "00.04.00",
   "network_prefix": "192.168.1",
   "interface": "eth0",
   "scan_range_start": 1,
@@ -14,15 +14,111 @@
   "systems_folder": "systems/homenetwork",
   "uptime_kuma": {
     "enabled": true,
-    "url": "http://linuxpc03:9333",
-    "username": "mwt",
-    "password": "kuma123",
-    "default_monitor_type": "ping",
     "default_interval": 60,
     "default_retry_interval": 60,
     "default_max_retries": 3,
-    "default_timeout": 48,
-    "ensure_tag_name": "server",
-    "ensure_tag_color": "#2563eb"
-  }
+    "default_timeout": 48
+  },
+  "additional_devices": [
+    {
+      "name": "AP - Master Bedroom",
+      "ip": "192.168.1.243"
+    },
+    {
+      "name": "AP - Family Room",
+      "ip": "192.168.1.44"
+    },
+    {
+      "name": "AP - First Floor",
+      "ip": "192.168.1.43"
+    },
+    {
+      "name": "AP - Office",
+      "ip": "192.168.1.40"
+    },
+    {
+      "name": "AP - Second Floor 2",
+      "ip": "192.168.1.42"
+    },
+    {
+      "name": "AP - Sui Lin",
+      "ip": "192.168.1.41"
+    },
+    {
+      "name": "Basement Camera",
+      "ip": "192.168.1.153"
+    },
+    {
+      "name": "Flex Mini - Basement Shelf",
+      "ip": "192.168.1.37"
+    },
+    {
+      "name": "Flex Mini - Bedroom Desk",
+      "ip": "192.168.1.38"
+    },
+    {
+      "name": "Flex Mini - Main Desk",
+      "ip": "192.168.1.34"
+    },
+    {
+      "name": "Flex Mini - Main Desk Gaming",
+      "ip": "192.168.1.33"
+    },
+    {
+      "name": "Flex Mini - Master Bedroom",
+      "ip": "192.168.1.32"
+    },
+    {
+      "name": "Flex Mini - Retro Gaming",
+      "ip": "192.168.1.31"
+    },
+    {
+      "name": "Flex Mini - Workbench",
+      "ip": "192.168.1.247"
+    },
+    {
+      "name": "Front Camera",
+      "ip": null
+    },
+    {
+      "name": "Front Camera 4K",
+      "ip": "192.168.1.155"
+    },
+    {
+      "name": "Great Room Camera",
+      "ip": "192.168.1.152"
+    },
+    {
+      "name": "Kitchen Camera",
+      "ip": "192.168.1.156"
+    },
+    {
+      "name": "Living Room Camera",
+      "ip": "192.168.1.151"
+    },
+    {
+      "name": "MainSwitch",
+      "ip": "192.168.1.3"
+    },
+    {
+      "name": "Media Switch - Living Room",
+      "ip": "192.168.1.36"
+    },
+    {
+      "name": "Media Switch - Lower Level",
+      "ip": "192.168.1.35"
+    },
+    {
+      "name": "nas5",
+      "ip": "192.168.1.55"
+    },
+    {
+      "name": "Second Floor Camera",
+      "ip": "192.168.1.150"
+    },
+    {
+      "name": "TamDreamPro",
+      "ip": "192.168.1.1"
+    }
+  ]
 }

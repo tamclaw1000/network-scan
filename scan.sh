@@ -3,6 +3,13 @@ set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="${BASE_DIR}/config.json"
+ENV_FILE="${BASE_DIR}/env.sh"
+
+# Load local secrets if present (KUMA_URL/KUMA_USERNAME/KUMA_PASSWORD)
+if [[ -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+fi
 
 # Load all runtime parameters from config.json
 mapfile -t CFG < <(python3 - "$CONFIG_FILE" "$BASE_DIR" <<'PY'

@@ -9,4 +9,3 @@ cd "$SCAN_DIR"
 
 mkdir -p "$VAULT_EXPORT_DIR"
 cp -f "$SCAN_DIR/devices.json" "$VAULT_EXPORT_DIR/devices.json"
-cp -f "$SCAN_DIR/Uptime_Kuma_Backup_from_scan_latest.json" "$VAULT_EXPORT_DIR/Uptime_Kuma_Backup_from_scan_latest.json"
