@@ -29,9 +29,15 @@ out(str(cfg["scan_range_end"]))
 out(str(cfg["ping_count"]))
 out(str(cfg["ping_timeout_seconds"]))
 out(str(cfg["ping_parallelism"]))
-out(str(base / cfg["output_json"]))
-out(str(base / cfg["output_markdown"]))
-out(str(base / cfg["history_file"]))
+import socket
+host=socket.gethostname()
+runtime_root = base / cfg.get("runtime_root", "logs")
+runtime_dir = runtime_root / host
+runtime_dir.mkdir(parents=True, exist_ok=True)
+
+out(str(runtime_dir / cfg["output_json"]))
+out(str(runtime_dir / cfg["output_markdown"]))
+out(str(runtime_dir / cfg["history_file"]))
 out(cfg["version"])
 PY
 )

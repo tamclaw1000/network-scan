@@ -7,6 +7,7 @@
   "ping_count": 1,
   "ping_timeout_seconds": 1,
   "ping_parallelism": 64,
+  "runtime_root": "logs",
   "output_json": "devices.json",
   "output_markdown": "devices.md",
   "history_file": ".scan_history.json",

@@ -89,14 +89,21 @@ def get_env_config() -> dict:
     cfg_path = base_dir / "config.json"
     data = json.loads(cfg_path.read_text())
 
+    host = socket.gethostname()
+    runtime_root = base_dir / data.get("runtime_root", "logs")
+    runtime_dir = runtime_root / host
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+
     cfg = {
         "iface": data["interface"],
         "network_prefix": data["network_prefix"],
-        "out_json": base_dir / data["output_json"],
-        "out_md": base_dir / data["output_markdown"],
-        "history_json": base_dir / data["history_file"],
+        "out_json": runtime_dir / data["output_json"],
+        "out_md": runtime_dir / data["output_markdown"],
+        "history_json": runtime_dir / data["history_file"],
         "version": data["version"],
         "base_dir": base_dir,
+        "runtime_dir": runtime_dir,
+        "host": host,
     }
     cfg["vault"] = {
         "config_path": cfg_path,

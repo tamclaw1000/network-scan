@@ -9,5 +9,6 @@ vault
 *.log
 *.txt
 junk/
-
+logs/
 env.sh
+
