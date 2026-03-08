@@ -474,10 +474,11 @@ def import_devices_into_uptime_kuma(payload: dict, kuma_cfg: dict) -> dict:
             "added": added,
             "skipped": skipped,
             "failed": failed,
+            "url": url,
             "error": f"uptime kuma login/import failed: {e}",
         }
 
-    return {"enabled": True, "added": added, "skipped": skipped, "failed": failed}
+    return {"enabled": True, "added": added, "skipped": skipped, "failed": failed, "url": url}
 
 
 def write_obsidian_exports(
@@ -785,19 +786,17 @@ def main() -> None:
 
     kuma_result = import_devices_into_uptime_kuma(payload, cfg.get("uptime_kuma", {}))
 
-    print(str(cfg["out_json"]))
-    print(str(cfg["out_md"]))
     if cfg.get("vault"):
         base = Path(cfg["vault"]["vault_path"]) / cfg["vault"]["systems_folder"]
-        print(str(base))
-    print(payload["count"])
+        print("Vault Path:" + str(base))
+    print(f"{payload['count']} devices processed.")
 
     if kuma_result.get("enabled"):
         if kuma_result.get("error"):
             print(f"Uptime Kuma import error: {kuma_result['error']}")
         else:
             print(
-                "Uptime Kuma import: "
+                f"Uptime Kuma import to {kuma_result['url']}: "
                 f"added={kuma_result['added']} "
                 f"skipped={kuma_result['skipped']} "
                 f"failed={kuma_result['failed']}"
